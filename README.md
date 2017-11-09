@@ -1,2 +1,2 @@
 # reactive-http
-Akka HTTP example
+Akka http example
