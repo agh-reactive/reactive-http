@@ -1,60 +1,61 @@
 package reactive5
 
-import akka.actor.{ Actor, ActorLogging }
-import akka.http.scaladsl.Http
+import akka.actor.typed.scaladsl.Behaviors
+import akka.actor.typed.{ActorSystem, Behavior}
 import akka.http.scaladsl.model._
-import akka.stream.{ ActorMaterializer, ActorMaterializerSettings }
+import akka.http.scaladsl.{Http, HttpExt}
 import akka.util.ByteString
-import akka.actor.ActorSystem
-import akka.actor.Props
+
 import scala.concurrent.Await
 import scala.concurrent.duration._
+import scala.util.{Failure, Success}
 
-class HTTPActor extends Actor
-  with ActorLogging {
+object HTTPActor {
+  sealed trait Message
+  case class WrappedHttpResponse(response: HttpResponse) extends Message
+  case object PoisonPill extends Message
 
-  import akka.pattern.pipe
-  import context.dispatcher
+  def start(http: HttpExt): Behavior[Message] = Behaviors.setup(context => {
+    val http = Http(context.system)
+    val request = http.singleRequest(HttpRequest(uri = "http://localhost:8080/hello"))
 
-  final implicit val materializer: ActorMaterializer = ActorMaterializer(ActorMaterializerSettings(context.system))
+    context.pipeToSelf(request) {
+      case Failure(exception) => PoisonPill
+      case Success(value) => WrappedHttpResponse(value)
+    }
 
-  val http = Http(context.system)
+    receive(http)
+  })
 
-  override def preStart() = {
-    http.singleRequest(HttpRequest(uri = "http://localhost:8080/hello"))
-      .pipeTo(self)
-  }
+  def receive(http: HttpExt): Behavior[Message] = Behaviors.receive((context, msg) => {
+    implicit val system = context.system
+    implicit val ec = context.executionContext
 
-  def receive = {
-    case resp @ HttpResponse(StatusCodes.OK, headers, entity, _) =>
-      entity.dataBytes.runFold(ByteString(""))(_ ++ _).foreach { body =>
-            println("Got response, body: " + body.utf8String)
-        resp.discardEntityBytes()
-        shutdown()
-      }
-    case resp @ HttpResponse(code, _, _, _) =>
-      println("Request failed, response code: " + code)
-      resp.discardEntityBytes()
-      shutdown()
-      
-  }
+    msg match {
+      case _ @ WrappedHttpResponse(HttpResponse(StatusCodes.OK, headers, entity, _)) =>
+        val foldFuture = entity.dataBytes.runFold(ByteString(""))(_ ++ _).map { body =>
+          println("Got response, body: " + body.utf8String)
+          PoisonPill
+        }
+        context.pipeToSelf(foldFuture)(_ => PoisonPill)
+        Behaviors.same
+      case _ @ WrappedHttpResponse(HttpResponse(code, _, _, _)) =>
+        println("Request failed, response code: " + code)
+        context.self ! PoisonPill
+        Behaviors.same
 
- def shutdown() = {
-    Await.result(http.shutdownAllConnectionPools(),Duration.Inf)
-      context.system.terminate()
- }
+      case PoisonPill =>
+        Await.result(http.shutdownAllConnectionPools(),Duration.Inf)
+        context.system.terminate()
+        Behaviors.stopped
+    }
+  })
 }
 
+object Main extends App {
+  val system = ActorSystem(Behaviors.empty, "http-system")
+  val http = Http(system)
+  val httpActor = system.systemActorOf(HTTPActor.start(http), "HTTP-Actor")
 
-object Main {
-
-  def main(args: Array[String]) {
- 
-    import system.dispatcher
-    
-    val system = ActorSystem("http-system")
-    val httpActor = system.actorOf(Props[HTTPActor], "HTTP-Actor")
-   
-    Await.ready(system.whenTerminated, Duration.Inf) 
-  }
+  Await.ready(system.whenTerminated, Duration.Inf)
 }
