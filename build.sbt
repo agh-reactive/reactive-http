@@ -1,11 +1,11 @@
 name := """reactive-http"""
 
-version := "1.2"
+version := "1.3"
 
-scalaVersion := "2.12.3"
+scalaVersion := "2.13.6"
    
-val akkaVersion = "2.5.4"
-val akkaHttpVersion = "10.0.10"
+val akkaVersion = "2.6.16"
+val akkaHttpVersion = "10.2.6"
 libraryDependencies += "com.typesafe.akka" %% "akka-http"   % akkaHttpVersion
-libraryDependencies += "com.typesafe.akka" %% "akka-actor"  % akkaVersion
-libraryDependencies += "com.typesafe.akka" %% "akka-stream" % akkaVersion
+libraryDependencies += "com.typesafe.akka" %% "akka-actor-typed"  % akkaVersion
+libraryDependencies += "com.typesafe.akka" %% "akka-stream-typed" % akkaVersion
